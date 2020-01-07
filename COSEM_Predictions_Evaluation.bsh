@@ -22,6 +22,8 @@ import net.imglib2.img.imageplus.*;
 import net.imglib2.realtransform.*;
 import net.imglib2.util.*;
 import net.imglib2.view.*;
+import net.imglib2.Cursor;
+
 
 import java.awt.event.*;
 
@@ -61,6 +63,7 @@ n5_prediction_1 = new N5FSReader("");
 n5_prediction_2 = new N5FSReader("");
 n5_raw_and_mask = new N5FSReader("");
 
+start_coordinates_array = new ArrayList();
 start_coordinates = new long[]{-1,-1,-1};
 end_coordinates = new long[]{-1,-1,-1};
 crop_coordinates = "";
@@ -135,7 +138,7 @@ public class ReadAndProcessImageInThread implements Runnable {
 		organelle_image_array[prediction_index][index_in_image_array] = imp_current_cropped;
     }
 }
-  
+ 
 public class MultithreadedImageReadingAndProcessing extends Thread {
 	//Class to create threads and run image processing on many threads
 	Thread[] threads = ThreadUtil.createThreadArray(2+2);//all organelles + 1 raw for each prediction, times 2 for two datasets
@@ -155,6 +158,27 @@ public class MultithreadedImageReadingAndProcessing extends Thread {
 }
 
 public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseListener {
+
+	public class GetValidImageCoordinatesInThread implements Runnable {
+		//Class used to read and process images within a thread
+	 	//Class parameters needed to read the appropriate data/prediction
+	 	int index_in_image_array, prediction_index;
+	 	String current_organelle;
+	 	n5_current = new N5FSReader("");
+	 	
+		public GetValidImageCoordinatesInThread(){
+			//Constructor
+
+		}
+		
+	    public void run(){
+	    	while(1){
+				getValidImageCoordinates();
+			}
+	    }
+	}
+ 
+
 	//Class for this plugin
 
 		//Create dialog boxes
@@ -270,6 +294,16 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 			generateNewSubvolumes();
 			results_table.show("Prediction Results");
 			plot.show(); 
+
+			Runnable test = new GetValidImageCoordinatesInThread();
+			//new Thread(test).start();
+			new Thread(new Runnable(){
+				public void run(){
+					while(true){
+						getValidImageCoordinates();
+					}
+				}
+			}).start();
 		}
 	}
 	
@@ -422,6 +456,7 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 	}
 
 	public void getValidImageCoordinates(){
+		print("Is anna the one true god\noh yeah yeah yeah\n");
 		//Function to ensure image coordinates are in mask and have sufficient organelle content
 		if(use_training_crops_for_evaluation){
 			getTrainingCropCoordinates();
@@ -485,12 +520,15 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 	public int numValidOrganelleVoxelsInCrop(n5){
 		//Function to count how many organelle voxels are in crop
 		organelle = N5Utils.open(n5, selected_organelle);
+
 		organelle_cropped = Views.interval(organelle, start_coordinates, end_coordinates);
-		ImagePlus imp_organelle_cropped = ImageJFunctions.wrap(organelle_cropped, "temp");
-		
+		ImagePlus imp_organelle_cropped = ImageJFunctions.wrap(organelle_cropped, "temp");		
+
 		statistics = new ij.process.StackStatistics(imp_organelle_cropped,256,0,255);
 		histogram = statistics.getHistogram();
-		int num_valid_organelle_voxels = Arrays.stream(histogram, 127,256).sum(); //from is inclusive, to is exclusive so this will give us 127-255		
+		int num_valid_organelle_voxels = Arrays.stream(histogram, 127,256).sum(); //from is inclusive, to is exclusive so this will give us 127-255	
+
+			
 		return num_valid_organelle_voxels;
 	}
 
