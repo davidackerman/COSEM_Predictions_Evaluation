@@ -13,6 +13,8 @@ import java.util.ArrayList;
 import java.util.stream.*;
 import ij3d.*;
 
+import org.apache.commons.math3.distribution.NormalDistribution;
+
 import org.janelia.saalfeldlab.n5.*;
 import org.janeliai.saalfeldlab.n5.imglib2.*;
 import org.janelia.saalfeldlab.n5.imglib2.*;
@@ -51,6 +53,8 @@ plot.setLimits(new double[]{current_limits[0],current_limits[1],0,1});
 data_select_dialog_box = new GenericDialogPlus("Select Data");
 subvolume_setup_dialog_box = new NonBlockingGenericDialog("Subvolume Setup");
 categorize_dialog_box = new NonBlockingGenericDialog("Prediction Comparison");
+out_of_crops_dialog = new GenericDialogPlus("No More Crops");
+predictions_are_different_dialog = new GenericDialogPlus("Predictions Are Stat. Sig. Different!");
 
 //Variables
 prediction_1_directory = "";
@@ -93,6 +97,8 @@ blind_image_array_assignments = new int[]{-1,-1};
 composite_image_suffix = new String[]{"A","B"};
 
 stop_coordinates_thread = false;
+
+probability_predictions_are_this_different_by_chance = 1;
 
 public class ReadAndProcessImageInThread implements Runnable {
 	//Class used to read and process images within a thread
@@ -262,7 +268,9 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 			evaluating_organelle = organelle_choices.get(0).getSelectedItem();
 			active_channels_list.add(true);//start with that channel on
 			selected_organelles_list.add(evaluating_organelle);
-			organelle_checkbox_labels_list.add("Red: " + evaluating_organelle + " (0)" );
+			String str = "Red: " + evaluating_organelle + ", p same: %.4f";
+			organelle_checkbox_labels_list.add(String.format(str,new Object[]{new Float(1)}));
+				//" + evaluating_organelle + ", p same: "));
 			organelle_table_string += evaluating_organelle +",";
 			organelle_checkbox_to_channel_mapping_list.add(0);
 
@@ -315,6 +323,13 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 			evaluation_result_counts[blind_image_array_assignments[1]]+=1;
 		}
 		else{evaluation_result_counts[2]+=1;}
+		total = evaluation_result_counts[0]+evaluation_result_counts[1];
+
+		// approximate with normal distribution: https://stats.stackexchange.com/questions/21581/how-to-assess-whether-a-coin-tossed-900-times-and-comes-up-heads-490-times-is-bi
+		mean = total*0.5;
+		std = Math.sqrt(total*0.5*0.5);
+		normalDistribution = new NormalDistribution(mean, std);
+		probability_predictions_are_this_different_by_chance = 2*normalDistribution.cumulativeProbability(Math.min(evaluation_result_counts[0], evaluation_result_counts[1]) + 0.5);//add 0.5 for "continuity correction". multiply by 2 becuase don't care which one is greater
 
 		//Update plot
 		plot.add("separated bar",evaluation_result_counts);
@@ -333,17 +348,24 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 
 		//Update selected organelle's checkbox label with count
 		organelle_color_checkboxes = categorize_dialog_box.getCheckboxes();
-		current_label = organelle_color_checkboxes.get(1).getLabel();
+		current_label = organelle_color_checkboxes.get(0).getLabel();
 		old_count = String.valueOf(organelle_crop_count);
 		new_count = String.valueOf(organelle_crop_count+1);
-		new_label = current_label.replace("(" + old_count + ")", "(" +  new_count + ")");
-		organelle_color_checkboxes.get(1).setLabel(new_label);
+		//new_label = current_label.replace("(" + old_count + ")", "(" +  new_count + ")");
+		String new_label = current_label.substring(0, current_label.length()-6) + "%.4f";
+		new_label = String.format(new_label, new Object[]{new Float(probability_predictions_are_this_different_by_chance)});
+		organelle_color_checkboxes.get(0).setLabel(new_label);
 		organelle_crop_count++;			
 
 		//Fill rest of table and save it
 		addEmptyEntriesToResultsTable(); 
 		results_table.show("Prediction Results"); 
 		results_table.saveAs(output_file); 
+
+		if(!use_training_crops_for_evaluation && probability_predictions_are_this_different_by_chance<0.01){
+			predictions_are_different_dialog.addMessage(String.format("The odds that Prediction 0 and Prediction 1 would be this different by chance is: %.4f\n", new Object[]{new Float(probability_predictions_are_this_different_by_chance)}));
+			predictions_are_different_dialog.showDialog();
+		}
 
 		//Get new subvolume
 		generateNewSubvolumes();
@@ -452,7 +474,7 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 		}
 		else{
 
-			while(start_coordinates_array.size() == 0){ //need to wait for thread to find coordinates
+			while(start_coordinates_array.size() == 0 || end_coordinates_array.size() == 0){ //need to wait for thread to find coordinates
 				Thread.sleep(100);
 			}
 
@@ -487,8 +509,8 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 			training_crops_info.remove(0);
 		}
 		else{
-			out_of_crops_dialog = new NonBlockingGenericDialog("No More Crops");
-			out_of_crops_dialog.addMessage("Ran out of crop regions to check");
+			out_of_crops_dialog.addMessage("Ran out of crop regions to check\n");
+			out_of_crops_dialog.showDialog();
 		}
 	}
 
@@ -551,6 +573,7 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 			}
 		}
 	}
+
 	
 	public void closeWindows(){
 		for (i=0; i<2; i++){
