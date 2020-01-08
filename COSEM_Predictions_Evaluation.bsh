@@ -64,6 +64,9 @@ n5_prediction_2 = new N5FSReader("");
 n5_raw_and_mask = new N5FSReader("");
 
 start_coordinates_array = new ArrayList();
+end_coordinates_array = new ArrayList();
+thread_start_coordinates = new long[]{-1, -1, -1};
+thread_end_coordinates = new long[]{-1, -1, -1};
 start_coordinates = new long[]{-1,-1,-1};
 end_coordinates = new long[]{-1,-1,-1};
 crop_coordinates = "";
@@ -88,6 +91,8 @@ evaluation_result_counts = new double[]{0,0,0};
 
 blind_image_array_assignments = new int[]{-1,-1};
 composite_image_suffix = new String[]{"A","B"};
+
+stop_coordinates_thread = false;
 
 public class ReadAndProcessImageInThread implements Runnable {
 	//Class used to read and process images within a thread
@@ -158,26 +163,6 @@ public class MultithreadedImageReadingAndProcessing extends Thread {
 }
 
 public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseListener {
-
-	public class GetValidImageCoordinatesInThread implements Runnable {
-		//Class used to read and process images within a thread
-	 	//Class parameters needed to read the appropriate data/prediction
-	 	int index_in_image_array, prediction_index;
-	 	String current_organelle;
-	 	n5_current = new N5FSReader("");
-	 	
-		public GetValidImageCoordinatesInThread(){
-			//Constructor
-
-		}
-		
-	    public void run(){
-	    	while(1){
-				getValidImageCoordinates();
-			}
-	    }
-	}
- 
 
 	//Class for this plugin
 
@@ -291,19 +276,24 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 			if(!use_training_crops_for_evaluation){
 				edge_length = (Integer)subvolume_setup_dialog_box.getNextNumber();
 			}
+
+			//new Thread(test).start();
+			if(!use_training_crops_for_evaluation){
+
+				new Thread(new Runnable(){
+					public void run(){
+						while(!stop_coordinates_thread && start_coordinates_array.size()<=300){
+							getEvaluationCropCoordinates();
+						}
+					}
+				}).start();
+				
+				getValidImageCoordinates();
+			}
+
 			generateNewSubvolumes();
 			results_table.show("Prediction Results");
 			plot.show(); 
-
-			Runnable test = new GetValidImageCoordinatesInThread();
-			//new Thread(test).start();
-			new Thread(new Runnable(){
-				public void run(){
-					while(true){
-						getValidImageCoordinates();
-					}
-				}
-			}).start();
 		}
 	}
 	
@@ -456,17 +446,33 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 	}
 
 	public void getValidImageCoordinates(){
-		print("Is anna the one true god\noh yeah yeah yeah\n");
 		//Function to ensure image coordinates are in mask and have sufficient organelle content
 		if(use_training_crops_for_evaluation){
 			getTrainingCropCoordinates();
 		}
 		else{
-			getRandomCropCoordinates();
-			while( !(croppedRegionIsInMask() && organelleIsInCroppedRegion())){
-				getRandomCropCoordinates();
+
+			while(start_coordinates_array.size() == 0){ //need to wait for thread to find coordinates
+				Thread.sleep(100);
 			}
+
+			start_coordinates = start_coordinates_array.get(0);
+			end_coordinates = end_coordinates_array.get(0);
+
+			start_coordinates_array.remove(0);
+			end_coordinates_array.remove(0);
 		}
+	}
+
+	public void getEvaluationCropCoordinates(){
+
+		getRandomCropCoordinates();
+		while( !(croppedRegionIsInMask() && organelleIsInCroppedRegion())){
+			getRandomCropCoordinates();
+		}
+
+		start_coordinates_array.add(thread_start_coordinates);
+		end_coordinates_array.add(thread_end_coordinates);
 	}
 
 	public void getTrainingCropCoordinates(){
@@ -485,26 +491,28 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 			out_of_crops_dialog.addMessage("Ran out of crop regions to check");
 		}
 	}
+
 	public void getRandomCropCoordinates(){
 		//Function to get random coordinates
 		startX = ThreadLocalRandom.current().nextInt((Integer)image_dimensions[0]-(edge_length-1));
 		startY = ThreadLocalRandom.current().nextInt((Integer)image_dimensions[1]-(edge_length-1));
 		startZ = ThreadLocalRandom.current().nextInt((Integer)image_dimensions[2]-(edge_length-1));
-		start_coordinates[0]=startX; start_coordinates[1]=startY; start_coordinates[2]=startZ;
-		end_coordinates[0]= start_coordinates[0]+edge_length-1; end_coordinates[1]= start_coordinates[1]+edge_length-1; end_coordinates[2] = start_coordinates[2]+edge_length-1;
+
+		thread_start_coordinates=new long[] {startX, startY, startZ};
+		thread_end_coordinates=new long[] {thread_start_coordinates[0]+edge_length-1, thread_start_coordinates[1]+edge_length-1, thread_start_coordinates[2]+edge_length-1};
 	}
 	
 	public boolean croppedRegionIsInMask(){
 		//Function to check if at least 20% of cropped region is in cell mask
 
 		//Crop the mask which is downscaled by a factor of 2
-		mask_start_coordinates = new long[]{Math.floor(start_coordinates[0]/2.0), Math.floor(start_coordinates[1]/2.0), Math.floor(start_coordinates[2]/2.0)};
-		mask_end_coordinates = new long[]{Math.floor(end_coordinates[0]/2.0), Math.floor(end_coordinates[1]/2.0), Math.floor(end_coordinates[2]/2.0)};	
+		mask_start_coordinates = new long[]{Math.floor(thread_start_coordinates[0]/2.0), Math.floor(thread_start_coordinates[1]/2.0), Math.floor(thread_start_coordinates[2]/2.0)};
+		mask_end_coordinates = new long[]{Math.floor(thread_end_coordinates[0]/2.0), Math.floor(thread_end_coordinates[1]/2.0), Math.floor(thread_end_coordinates[2]/2.0)};	
 		img_mask = N5Utils.open(n5_raw_and_mask, "/volumes/masks/foreground");
 		mask_cropped = Views.interval(img_mask, mask_start_coordinates, mask_end_coordinates);
 		
 		ImagePlus imp_mask_cropped = ImageJFunctions.wrap(mask_cropped, "temp");
-		statistics = new ij.process.StackStatistics(imp_mask_cropped,256,0,255);	
+		statistics = new ij.process.StackStatistics(imp_mask_cropped,256,0,255);
 		return statistics.mean>=255.0*0.2; //20% within cell
 	}
 
@@ -521,7 +529,7 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 		//Function to count how many organelle voxels are in crop
 		organelle = N5Utils.open(n5, selected_organelle);
 
-		organelle_cropped = Views.interval(organelle, start_coordinates, end_coordinates);
+		organelle_cropped = Views.interval(organelle, thread_start_coordinates, thread_end_coordinates);
 		ImagePlus imp_organelle_cropped = ImageJFunctions.wrap(organelle_cropped, "temp");		
 
 		statistics = new ij.process.StackStatistics(imp_organelle_cropped,256,0,255);
@@ -557,6 +565,7 @@ public class COSEM_Predictions_Evaluation implements PlugIn, KeyListener, MouseL
 		IJ.run("Synchronize Windows", "");
 		IJ.run("Brightness/Contrast...");
 		categorizeDialogBox();
+		stop_coordinates_thread = true;
 		closeWindows();	
 	}
  
